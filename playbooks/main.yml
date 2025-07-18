@@ -1,0 +1,149 @@
+---
+- name: iosxe-unbundled
+  hosts: cat9300s
+  gather_facts: no
+  connection: network_cli
+
+  roles:
+    - ansible-pyats
+
+  vars:
+    # Define target_image and target_image_size at the top level for easier management
+    # target_image: "your_target_image.bin"  # Replace with your target image name
+    # target_image_size: 104857600  # Example: 100MB, replace with actual size in bytes
+    # flash_dir: "bootflash:" # Define flash_dir variable
+
+  tasks:
+    - name: Gather device information (show version, dir)
+      block: # Use a block for better organization
+        - name: Get show version
+          ios_command:
+            commands: "show version"
+          register: show_version_before
+          changed_when: false
+
+        - name: Parse IOSXE version with PyATS
+          set_fact:
+            sh_ver_output: "{{ show_version_before.stdout[0] | pyats_parser('show version', 'iosxe') }}"
+          when: show_version_before.stdout is defined
+
+        - name: Get disk space
+          ios_command:
+            commands: "dir {{ flash_dir }}"
+          register: disk_check
+          changed_when: false
+
+        - name: Get contents of directory - check for {{ target_image }}
+          ios_command:
+            commands: "dir {{ flash_dir }}/{{ target_image }}" # Check specifically for the file
+          register: target_image_check
+          changed_when: false
+          ignore_errors: true
+
+        - name: Set facts from gathered information
+          set_fact:
+            is_stacked: "{{ sh_ver_output.version.switch_num | length > 1 }}" # More clear name
+            xe_version_before: "{{ sh_ver_output.version.xe_version | default('unknown') }}"
+            bootmode: "{{ sh_ver_output.version.switch_num['1']['mode'] | default('unknown') }}"
+            free_flash_space: "{{ disk_check.stdout[0] | pyats_parser('dir', 'iosxe') | default({}) }}" # Handle parsing failures
+            image_found: "{{ target_image_check.stdout is defined }}" # Simpler check
+            timestamp: "{{ lookup('pipe','date \"+%Y-%m-%d-%H-%M\"') }}"
+      tags: pre-check, check-version, disk_check, image-check, image-copy, install
+
+    - name: Verify device readiness
+      block:
+        - name: Check if switch is stacked
+          assert:
+            that:
+              - not is_stacked  # Check for NOT stacked
+            success_msg: "{{ inventory_hostname }} is not part of a stack."
+            fail_msg: "Switch is part of a stack. Exiting."
+
+        - name: Check software version
+          assert:
+            that:
+              - xe_version_before != "unknown"
+            success_msg: "Current Software Version: {{ xe_version_before }}"
+            fail_msg: "Software version not found. Exiting."
+
+        - name: Check bootmode
+          assert:
+            that:
+              - bootmode != "unknown"
+            success_msg: "Bootmode: {{ bootmode }}"
+            fail_msg: "Bootmode not found. Exiting."
+
+        - name: Check free flash space
+          assert:
+            that:
+              - free_flash_space['dir'][flash_dir + '/']['bytes_free'] | int > target_image_size | int
+            success_msg: 'Enough flash space available.'
+            fail_msg: 'Not enough flash space available!'
+
+      tags: pre-check, image-check, disk_check
+
+    - name: Prepare device for upgrade
+      block:
+        - name: Copy IOSXE image file via TFTP if not present
+          block:
+            - name:
+              tags: image-copy, install
+              ios_command:
+                commands: 
+                  - command: "copy tftp://{{ tftp_server }}/{{ target_image }} flash:{{ target_image }}"
+                    check_all: True  
+                    prompt:
+                      - "Destination filename [{{ target_image }}]?"
+                    answer:
+                      - "\r"
+                wait_for:
+                  - result[0] contains {{ target_image_size }} bytes copied
+              vars:
+                ansible_command_timeout: 1200
+              no_log: false
+              register: image_copy
+
+            - name: Target image MD5 File Validation
+              tags: image-validate, install
+              ios_command:
+                commands:
+                  - verify /md5 {{ flash_dir }}{{ target_image }} {{ target_image_md5 }}
+                wait_for:
+                  - result[0] contains Verified
+              vars:
+                ansible_command_timeout: 600
+              register: image_validation_result
+          when: not image_found
+
+        - name: Backup {{ inventory_hostname }} before starting upgrade.
+          tags: backup, install
+          ios_config:
+            backup: yes
+            backup_options:
+              filename: "{{ inventory_hostname }}_backup_{{ timestamp }}.cfg"
+              dir_path: ./backups
+          register: config_output
+
+        - name: Apply Workaround for CSCwk36412 - update ip ssh bulk-mode and tcp window-size
+          tags: install, workaround
+          cisco.ios.ios_config:
+            lines:
+              - 'event syslog pattern "%SYS-5-RESTART:" maxrun 300'
+              - 'action 005 wait 180'
+              - 'action 015 cli command "enable"'
+              - 'action 020 cli command "configure terminal"'
+              - 'action 025 cli command "no ip ssh bulk-mode"'
+              - 'action 030 cli command "ip tcp window-size 4128"'
+              - 'action 035 cli command "end"'
+              - 'action 040 cli command "wr"'
+              - 'action 045 syslog msg "Changes Applied Successfully"'
+            parents:
+              - 'event manager applet CSCwk36412_Workaround'
+        
+        - name: Save configuration (IOS/IOS-XE)
+          ios_command:
+            commands:
+              - command: "copy running-config startup-config"
+                prompt: "Destination filename "
+                answer: "\r"  # Or just an empty string "" if the default is okay
+

@@ -1,0 +1,123 @@
+---
+
+- name: iosxe-unbundled
+  hosts: cat9300s
+  gather_facts: no
+  connection: network_cli
+
+  ## Make sure you have the following role installed.
+  roles:
+    - ansible-pyats
+
+  tasks:
+      ############ Gather Facts ############
+      - debug: msg="Gathering Facts and Backing up {{ inventory_hostname }}"
+        tags: pre-check, install
+
+      # Retrieve Show Version Output
+      - name: Get show version
+        tags: pre-check, check-version, post-check, install
+        ios_command:
+          commands: 
+            - show version
+        register: show_version_before
+
+      # Parse show version with pyats
+      - name: Parse IOSXE version with PyATS 
+        tags: pre-check, check-version, post-check, install
+        set_fact:
+          sh_ver_output: "{{ show_version_before['stdout'][0] | pyats_parser('show version', 'iosxe') }}"
+      
+      # Determine if switch is in a stack
+      - name: Check if Switch is in Stack
+        set_fact:
+          is_not_stacked: "{{ sh_ver_output.version.switch_num | length == 1 }}"      
+
+      # Get the disk space using PyATS
+      - name: Retrieve disk space available on device
+        tags: pre-check, disk_check, image-check, image-copy, install
+        ios_command:
+          commands: dir
+        register: disk_check
+
+      # Determine whether target image is on device 
+      - name: Check if switch has the target image in the {{ flash_dir }} directory
+        tags: pre-check, install, image-check, image-copy
+        ios_command:
+          commands: "dir {{ flash_dir }}"
+        register: image_check
+        changed_when: false  # No configuration change, so not "changed"
+
+      # Set Facts
+      - name: Set Facts from Show Version
+        set_fact:
+          bootmode: "{{ sh_ver_output.version.switch_num['1']['mode'] | default('unknown') }}"
+          xe_version_before: "{{ sh_ver_output.version.xe_version | default('unknown') }}"
+          dsk_chk: "{{ disk_check['stdout'][0] | pyats_parser('dir', 'iosxe') | default('unknown') }}"
+          image_found: "{{ image_check.stdout[0] | regex_search(target_image, multiline=True) | length > 0 }}"
+          timestamp: "{{ lookup('pipe','date \"+%Y-%m-%d-%H-%M\"') }}"
+
+      ############ Verify ready for upgrade ############
+      # Check that switch not part of a stack, stop playbook.
+      - name: Stop if {{ inventory_hostname }} is part of a stack
+        assert:
+          that:
+            - is_not_stacked
+          success_msg: "{{ inventory_hostname }} not part of a stack."
+          fail_msg: "Switch is part of a stack.  Exiting."
+
+      # Check for Version
+      - name: Stop if version information for {{ inventory_hostname }} not found.
+        assert:
+          that:
+            - xe_version_before != "unknown"
+          success_msg: "Software Version found: {{ xe_version_before }}"
+          fail_msg: "Software version note found.  Exiting."
+
+      # Check for Bootmode
+      - name: Stop if version information for {{ inventory_hostname }} not found.
+        assert:
+          that:
+            - bootmode != "unknown"
+          success_msg: "Bootmode found.  Set to {{ bootmode }}"
+          fail_msg: "Bootmode note found.  Exiting."
+
+      # Check for Disk Space
+      - name: Assert Enough Disk Space Available
+        tags: image-copy, install
+        assert:
+          quiet: no
+          success_msg: 'Enough disk space available to accommodate target image.'
+          fail_msg: 'Not enough disk space available for the target image!'
+          that:
+            - dsk_chk['dir'][flash_dir + '/']['bytes_free'] | int > target_image_size | int
+
+      ############ Apply Workaround and Prepare for Upgrade ############
+      # Backup Device Configuration
+      - name: Backing up {{ inventory_hostname }} before starting upgrade.
+        tags: backup, install
+        ios_config:
+          backup: yes
+          backup_options:
+            filename: "{{ inventory_hostname }}_backup_{{ timestamp }}.cfg"
+            dir_path: ./backups
+        register: config_output
+
+      # Apply CSCwk36412 Workaround
+      - name: Apply CSCwk36412 Workaround
+        tags: workaround
+        cisco.ios.ios_config:
+          lines:
+            - 'event syslog pattern "%SYS-5-RESTART:" maxrun 300'
+            - 'action 005 wait 180'
+            - 'action 015 cli command "enable"'
+            - 'action 020 cli command "configure terminal"'
+            - 'action 025 cli command "no ip ssh bulk-mode"'
+            - 'action 030 cli command "ip tcp window-size 4128"'
+            - 'action 035 cli command "end"'
+            - 'action 040 cli command "wr"'
+            - 'action 045 syslog msg "Changes Applied Successfully"'
+          parents:
+            - 'event manager applet CSCwk36412_Workaround authorization bypass' 
+          
+        

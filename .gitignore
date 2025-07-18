@@ -171,4 +171,4 @@ cython_debug/
 .pypirc
 
 # Private Ansible Files
-./inventory/hosts.yml
+inventory/hosts.yml

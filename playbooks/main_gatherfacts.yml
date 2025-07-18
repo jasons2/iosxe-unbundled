@@ -1,0 +1,44 @@
+---
+
+- name: iosxe-unbundled
+  hosts: cat9300s
+  gather_facts: yes
+  connection: network_cli
+
+  tasks:
+      ## Start PreCheck
+      - debug: msg="Starting pre-check"
+        tags: pre-check, install
+
+      # Set facts for later use
+      - name: Set version and image facts
+        tags: install, backup
+        set_fact:
+          xe_version_before: "{{ ansible_net_version | default('Not Found') }}"
+          xe_image: "{{ ansible_net_image | default('Not Found') }}"
+
+      - name: Set the current time as a fact
+        tags: backup, install
+        set_fact: timestamp="{{ lookup('pipe','date \"+%Y-%m-%d-%H-%M\"') }}" 
+
+      - set_fact:
+          bootmode: "unknown"  # Set a default value
+
+      - name: Set bootmode fact based on xe_image content
+        tags: backup, install
+        set_fact:
+          bootmode: "{{ 'install' if 'packages.conf' in xe_image else 'bundled' if '.bin' in xe_image else bootmode }}"
+
+      # Print information about the device to the console
+      - name: Set facts
+        tags: install, backup
+        debug:
+          msg:
+            - "Device Name: {{ ansible_net_hostname }}"
+            - "Device Mode: {{ ansible_net_model | default('Not Found') }}" # Handle missing facts
+            - "Serial Number: {{ ansible_net_serialnum | default('Not Found') }}"
+            - "IOSXE Version: {{ xe_version_before }}"
+            - "IOSXE Image: {{ xe_image }}"
+            - "BootMode: {{ bootmode }}"
+            - "Date: {{ timestamp }}"
+

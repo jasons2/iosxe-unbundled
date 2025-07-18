@@ -1,0 +1,20 @@
+ansible_user: admin
+ansible_password: cisco.123
+ansible_network_os: cisco.ios.ios
+ansible_connection: ansible.netcommon.network_cli
+ansible_ssh_transfer_method: tftp
+ansible_become: yes
+ansible_become_method: enable
+ansible_become_password: cisco.123
+
+# Upgrade Variables
+flash_dir: 'flash:' # e.g: 'bootflash' or 'flash:'
+# target_xe_ver: 17.12.04
+# target_image: cat9k_iosxe.17.12.04.SPA.bin
+# target_image_size: 1306917133
+# target_image_md5: 1e3ab8c2357b33784373b626c190b907
+tftp_server: 10.225.243.3
+target_xe_ver: 17.09.04a
+target_image: cat9k_iosxe.17.09.04a.SPA.bin
+target_image_size: 1251579379
+target_image_md5: 16a20aa19ec9deb2abe421efddb75fae
