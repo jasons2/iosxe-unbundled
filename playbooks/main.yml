@@ -15,7 +15,7 @@
 
   tasks:
     - name: Gather device information (show version, dir)
-      block: # Use a block for better organization
+      block:
         - name: Get show version
           ios_command:
             commands: "show version"
@@ -123,22 +123,6 @@
               filename: "{{ inventory_hostname }}_backup_{{ timestamp }}.cfg"
               dir_path: ./backups
           register: config_output
-
-        - name: Apply Workaround for CSCwk36412 - update ip ssh bulk-mode and tcp window-size
-          tags: install, workaround
-          cisco.ios.ios_config:
-            lines:
-              - 'event syslog pattern "%SYS-5-RESTART:" maxrun 300'
-              - 'action 005 wait 180'
-              - 'action 015 cli command "enable"'
-              - 'action 020 cli command "configure terminal"'
-              - 'action 025 cli command "no ip ssh bulk-mode"'
-              - 'action 030 cli command "ip tcp window-size 4128"'
-              - 'action 035 cli command "end"'
-              - 'action 040 cli command "wr"'
-              - 'action 045 syslog msg "Changes Applied Successfully"'
-            parents:
-              - 'event manager applet CSCwk36412_Workaround'
         
         - name: Save configuration (IOS/IOS-XE)
           ios_command:

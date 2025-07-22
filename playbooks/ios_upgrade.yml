@@ -52,22 +52,6 @@
           dir_path: ./backup
       register: config_output
 
-    ## Apply Workaround for CSCwk36412
-    - name: Apply Workaround for CSCwk36412 - update ip ssh bulk-mode and tcp window-size
-      tags: install, workaround
-      cisco.ios.ios_config:
-        lines:
-          - 'event manager applet CSCwk36412_Workaround authorization bypass'
-          - 'event syslog pattern "%SYS-5-RESTART:" maxrun 300'
-          - 'action 005 wait 180'
-          - 'action 015 cli command "enable"'
-          - 'action 020 cli command "configure terminal"'
-          - 'action 025 cli command "no ip ssh bulk-mode"'
-          - 'action 030 cli command "ip tcp window-size 4128"'
-          - 'action 035 cli command "end"'
-          - 'action 040 cli command "wr"'
-          - 'action 045 syslog msg "Changes Applied Successfully"'
-
     ## Check that Current IOSXE version is not target version with with PyATS
     - name: Get current IOSXE version
       tags: pre-check, check-version, post-check, install
@@ -196,7 +180,7 @@
         lines:
           - "no boot system"
           - "boot system flash:packages.conf"
-          - "exit"
+          - "end"
 
     - name: Install/Upgrade IOSXE Software
       block:
